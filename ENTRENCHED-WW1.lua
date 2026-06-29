@@ -54,7 +54,7 @@ local Settings = {
 	AllyColor = Color3.fromRGB(0, 255, 0),
 	-- misc
 	SpeedBoost = false,
-	SpeedAmount = 5,
+	SpeedAmount = 3,
 	AutoDeploy = false,
 	AnimCancel = false,
 	NoJumpCooldown = false,
@@ -291,7 +291,7 @@ local SpeedGroup = MiscTab:AddLeftGroupbox("Movement")
 SpeedGroup:AddToggle("SpeedBoost", { Text = "Speed Boost", Default = false })
 	:OnChanged(function(v) Settings.SpeedBoost = v end)
 
-SpeedGroup:AddSlider("SpeedAmount", { Text = "Extra Speed", Default = 5, Min = 1, Max = 8, Rounding = 0 })
+SpeedGroup:AddSlider("SpeedAmount", { Text = "Extra Speed", Default = 3, Min = 1, Max = 5, Rounding = 0 })
 	:OnChanged(function(v) Settings.SpeedAmount = v end)
 
 SpeedGroup:AddToggle("NoJumpCooldown", { Text = "No Jump Cooldown", Default = false })
@@ -1050,21 +1050,16 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 		if blur then blur.Size = 0 end
 	end
 
-	-- misc: speed boost — override DefaultWalkSpeed attribute so game's speedChanger uses our value
+	-- misc: speed boost — set WalkSpeed directly, don't touch attributes (server detects attribute tampering)
 	if Settings.SpeedBoost then
 		local char = plr.Character
 		if char then
 			local hum = char:FindFirstChildOfClass("Humanoid")
 			if hum then
-				local backup = hum:GetAttribute("DefaultWalkSpeedBackup") or 12
-				local boosted = backup + Settings.SpeedAmount
-				local current = hum:GetAttribute("DefaultWalkSpeed")
-				if current ~= boosted then
-					hum:SetAttribute("DefaultWalkSpeed", boosted)
-					hum.WalkSpeed = boosted
-					if Settings.MiscDebug then
-						print("[Speed] Backup:", backup, "Boosted:", boosted)
-					end
+				local defaultSpeed = hum:GetAttribute("DefaultWalkSpeed") or 12
+				local targetSpeed = defaultSpeed + Settings.SpeedAmount
+				if hum.WalkSpeed ~= targetSpeed then
+					hum.WalkSpeed = targetSpeed
 				end
 			end
 		end
