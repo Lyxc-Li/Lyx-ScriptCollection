@@ -484,16 +484,34 @@ local function getPredictedPosition(part)
 	if not Settings.AimPrediction then return part.Position end
 	local hrp = part.Parent and part.Parent:FindFirstChild("HumanoidRootPart")
 	if not hrp then return part.Position end
-	local dist = (part.Position - Camera.CFrame.Position).Magnitude
-	local travelTime = dist / Settings.BulletSpeed
 	local vel = hrp.AssemblyLinearVelocity
-	-- lead target horizontally + compensate for bullet drop
-	-- bullet drops by 0.5 * gravity * t^2, so aim UP by that amount
-	local dropCompensation = Vector3.zero
-	if Settings.BulletGravity.Magnitude > 0 then
-		dropCompensation = -0.5 * Settings.BulletGravity * travelTime * travelTime
+	local camPos = Camera.CFrame.Position
+
+	-- iterative prediction: 2 passes for convergence
+	local predicted = part.Position
+	for _ = 1, 2 do
+		local dist = (predicted - camPos).Magnitude
+		local travelTime = dist / Settings.BulletSpeed
+		local dropCompensation = Vector3.zero
+		if Settings.BulletGravity.Magnitude > 0 then
+			dropCompensation = -0.5 * Settings.BulletGravity * travelTime * travelTime
+		end
+		predicted = part.Position + vel * travelTime + dropCompensation
 	end
-	return part.Position + Vector3.new(vel.X, 0, vel.Z) * travelTime + dropCompensation
+	return predicted
+end
+
+-- check if predicted position is reachable (no walls in the way)
+local function isPredictedVisible(origin, predictedPos)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local ignore = {}
+	for _, p in Players:GetPlayers() do
+		if p.Character then table.insert(ignore, p.Character) end
+	end
+	params.FilterDescendantsInstances = ignore
+	local result = workspace:Raycast(origin, predictedPos - origin, params)
+	return result == nil
 end
 
 ----------------------------------------------------------------
@@ -632,6 +650,14 @@ local function updateChams(player, character)
 end
 
 connections[#connections + 1] = Players.PlayerRemoving:Connect(function(player)
+	-- clear aimbot/triggerbot refs if they pointed at this player
+	if lockedTarget and lockedTarget.Parent and Players:GetPlayerFromCharacter(lockedTarget.Parent) == player then
+		lockedTarget = nil
+	end
+	if currentFOVTarget and currentFOVTarget.Parent and Players:GetPlayerFromCharacter(currentFOVTarget.Parent) == player then
+		currentFOVTarget = nil
+	end
+
 	if chamsCache[player] then
 		chamsCache[player]:Destroy()
 		chamsCache[player] = nil
@@ -842,6 +868,9 @@ highlightDot.Visible = false
 connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 	Camera = workspace.CurrentCamera
 	currentFOVTarget = getClosestInFOV()
+	-- clear stale refs from disconnected players
+	if currentFOVTarget and not currentFOVTarget.Parent then currentFOVTarget = nil end
+	if lockedTarget and not lockedTarget.Parent then lockedTarget = nil end
 
 	-- sync bullet speed input with auto-detected value
 	if Options.BulletSpeed and tostring(math.round(Settings.BulletSpeed)) ~= Options.BulletSpeed.Value then
@@ -892,9 +921,15 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 			for _, partName in checkParts do
 				local part = player.Character:FindFirstChild(partName)
 				if not part then continue end
+
+				-- check visibility to current position
 				if Settings.VisibleOnly and not isVisibleThroughGlass(Camera.CFrame.Position, part) then continue end
 
 				local predictedPos = getPredictedPosition(part)
+
+				-- also check line of sight to predicted position
+				if Settings.VisibleOnly and not isPredictedVisible(Camera.CFrame.Position, predictedPos) then continue end
+
 				local sPos, onScreen = Camera:WorldToViewportPoint(predictedPos)
 				if not onScreen then continue end
 
