@@ -56,6 +56,7 @@ local Settings = {
 	SpeedBoost = false,
 	SpeedAmount = 3,
 	AutoDeploy = false,
+	AutoReload = false,
 	AnimCancel = false,
 	NoJumpCooldown = false,
 	JumpBoost = false,
@@ -310,6 +311,9 @@ local AutoGroup = MiscTab:AddRightGroupbox("Automation")
 
 AutoGroup:AddToggle("AutoDeploy", { Text = "Auto Deploy", Default = false })
 	:OnChanged(function(v) Settings.AutoDeploy = v end)
+
+AutoGroup:AddToggle("AutoReload", { Text = "Auto Reload", Default = false })
+	:OnChanged(function(v) Settings.AutoReload = v end)
 
 AutoGroup:AddToggle("MiscDebug", { Text = "Debug Log", Default = false })
 	:OnChanged(function(v) Settings.MiscDebug = v end)
@@ -1111,6 +1115,25 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 					end
 				end
 			end)
+		end
+	end
+
+	-- misc: auto reload — press R the frame ammo hits 0
+	if Settings.AutoReload then
+		local char = plr.Character
+		if char then
+			local tool = char:FindFirstChildOfClass("Tool")
+			if tool then
+				local ammo = tool:FindFirstChild("Hold") and tool.Hold:FindFirstChild("AmmoLoaded")
+				local capacity = tool:GetAttribute("AmmoCapacity")
+				if ammo and capacity and ammo.Value <= 0 then
+					keypress(0x52) -- R key
+					task.defer(function() keyrelease(0x52) end)
+					if Settings.MiscDebug then
+						print("[Auto Reload] Ammo empty, pressing R on:", tool.Name)
+					end
+				end
+			end
 		end
 	end
 
