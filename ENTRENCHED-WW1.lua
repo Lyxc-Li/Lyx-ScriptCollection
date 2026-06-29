@@ -24,6 +24,7 @@ local Settings = {
 	AntiSpread = false,
 	Triggerbot = false,
 	TriggerRadius = 15,
+	TriggerDelay = 0,
 	AimPrediction = true,
 	BulletSpeed = 4100,
 	BulletGravity = Vector3.zero,
@@ -51,6 +52,13 @@ local Settings = {
 	ESP_EnemyOnly = true,
 	EnemyColor = Color3.fromRGB(255, 0, 0),
 	AllyColor = Color3.fromRGB(0, 255, 0),
+	-- misc
+	SpeedBoost = false,
+	SpeedAmount = 5,
+	AutoDeploy = false,
+	AnimCancel = false,
+	ForceCanFire = false,
+	MiscDebug = false,
 }
 
 local lockedTarget = nil
@@ -89,6 +97,7 @@ end)
 local AimbotTab = Window:AddTab("Aimbot")
 local ESPTab = Window:AddTab("ESP")
 local WorldTab = Window:AddTab("World")
+local MiscTab = Window:AddTab("Misc")
 local SettingsTab = Window:AddTab("Settings")
 
 -- Aimbot > FOV
@@ -146,6 +155,9 @@ TriggerGroup:AddToggle("Triggerbot", { Text = "Enable Triggerbot", Default = fal
 
 TriggerGroup:AddSlider("TriggerRadius", { Text = "Trigger Radius (px)", Default = 15, Min = 1, Max = 50, Rounding = 0 })
 	:OnChanged(function(v) Settings.TriggerRadius = v end)
+
+TriggerGroup:AddSlider("TriggerDelay", { Text = "Trigger Delay (ms)", Default = 0, Min = 0, Max = 100, Rounding = 0 })
+	:OnChanged(function(v) Settings.TriggerDelay = v end)
 
 -- Aimbot > Prediction
 LockGroup:AddToggle("AimPrediction", { Text = "Aim Prediction", Default = true })
@@ -271,6 +283,31 @@ CameraGroup:AddToggle("WideFOV", { Text = "Wide FOV", Default = false })
 
 CameraGroup:AddSlider("FOVAmount", { Text = "FOV", Default = 90, Min = 70, Max = 120, Rounding = 0 })
 	:OnChanged(function(v) Settings.FOVAmount = v end)
+
+-- Misc tab
+local SpeedGroup = MiscTab:AddLeftGroupbox("Movement")
+
+SpeedGroup:AddToggle("SpeedBoost", { Text = "Speed Boost", Default = false })
+	:OnChanged(function(v) Settings.SpeedBoost = v end)
+
+SpeedGroup:AddSlider("SpeedAmount", { Text = "Extra Speed", Default = 5, Min = 1, Max = 8, Rounding = 0 })
+	:OnChanged(function(v) Settings.SpeedAmount = v end)
+
+local CombatGroup = MiscTab:AddLeftGroupbox("Combat")
+
+CombatGroup:AddToggle("AnimCancel", { Text = "Anim Cancel", Default = false })
+	:OnChanged(function(v) Settings.AnimCancel = v end)
+
+CombatGroup:AddToggle("ForceCanFire", { Text = "Force Fire", Default = false })
+	:OnChanged(function(v) Settings.ForceCanFire = v end)
+
+local AutoGroup = MiscTab:AddRightGroupbox("Automation")
+
+AutoGroup:AddToggle("AutoDeploy", { Text = "Auto Deploy", Default = false })
+	:OnChanged(function(v) Settings.AutoDeploy = v end)
+
+AutoGroup:AddToggle("MiscDebug", { Text = "Debug Log", Default = false })
+	:OnChanged(function(v) Settings.MiscDebug = v end)
 
 -- Settings tab
 SaveManager:SetLibrary(Library)
@@ -518,6 +555,7 @@ end
 -- Triggerbot state
 ----------------------------------------------------------------
 local triggerHeld = false
+local triggerLockTime = 0
 
 ----------------------------------------------------------------
 -- Aimbot input
@@ -941,15 +979,26 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 			end
 		end
 
-		if triggerTarget and not triggerHeld then
-			triggerHeld = true
-			mouse1press()
-		elseif not triggerTarget and triggerHeld then
-			triggerHeld = false
-			mouse1release()
+		if triggerTarget then
+			if not triggerHeld then
+				if triggerLockTime == 0 then
+					triggerLockTime = tick()
+				end
+				if (tick() - triggerLockTime) * 1000 >= Settings.TriggerDelay then
+					triggerHeld = true
+					mouse1press()
+				end
+			end
+		else
+			triggerLockTime = 0
+			if triggerHeld then
+				triggerHeld = false
+				mouse1release()
+			end
 		end
 	elseif triggerHeld then
 		triggerHeld = false
+		triggerLockTime = 0
 		mouse1release()
 	end
 
@@ -996,7 +1045,80 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 		if blur then blur.Size = 0 end
 	end
 
-	-- info: empty block, FOV handled in separate Heartbeat to override game tweens
+	-- misc: speed boost within anti-cheat threshold
+	if Settings.SpeedBoost then
+		local char = plr.Character
+		if char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				local defaultSpeed = hum:GetAttribute("DefaultWalkSpeed") or 14
+				local targetSpeed = defaultSpeed + Settings.SpeedAmount
+				if hum.WalkSpeed < targetSpeed then
+					if Settings.MiscDebug then
+						print("[Speed] Default:", defaultSpeed, "Target:", targetSpeed, "Current:", hum.WalkSpeed)
+					end
+					hum.WalkSpeed = targetSpeed
+				end
+			end
+		end
+	end
+
+	-- misc: auto deploy — fire Deploy remote when on deploy screen
+	if Settings.AutoDeploy then
+		local char = plr.Character
+		if not char or not char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("Humanoid").Health <= 0 then
+			pcall(function()
+				local gui = plr.PlayerGui:FindFirstChild("GameGui")
+				if gui then
+					local deploy = gui:FindFirstChild("deployScreen") or gui:FindFirstChild("DeployScreen")
+					if deploy and deploy.Visible then
+						if Settings.MiscDebug then
+							print("[Auto Deploy] Deploy screen detected, firing Deploy remote")
+						end
+						game:GetService("ReplicatedStorage").ServerEvents.Deploy:FireServer()
+					end
+				end
+			end)
+		end
+	end
+
+	-- misc: animation cancel — speed up reload/bolt animations
+	if Settings.AnimCancel then
+		local char = plr.Character
+		if char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				for _, track in hum:GetPlayingAnimationTracks() do
+					local name = track.Animation and track.Animation.Name or ""
+					if name == "reload" or name == "boltCycle" then
+						if Settings.MiscDebug then
+							print("[Anim Cancel] Speeding up:", name, "Length:", track.Length)
+						end
+						track:AdjustSpeed(3)
+					end
+				end
+			end
+		end
+	end
+
+	-- misc: force fire — keep clientCanFire true on equipped weapon
+	if Settings.ForceCanFire then
+		local char = plr.Character
+		if char then
+			local tool = char:FindFirstChildOfClass("Tool")
+			if tool then
+				local canFireAttr = tool:GetAttribute("CanFire")
+				local canFireVal = tool:FindFirstChild("CanFire")
+				if Settings.MiscDebug and (canFireAttr == false or (canFireVal and canFireVal.Value == false)) then
+					print("[Force Fire] Overriding CanFire on:", tool.Name, "Attr:", canFireAttr, "Val:", canFireVal and canFireVal.Value)
+				end
+				if canFireVal and typeof(canFireVal) == "Instance" then
+					pcall(function() canFireVal.Value = true end)
+				end
+				pcall(function() tool:SetAttribute("CanFire", true) end)
+			end
+		end
+	end
 
 	-- ESP loop
 	local screenBottom = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
