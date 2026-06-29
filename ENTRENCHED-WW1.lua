@@ -57,7 +57,8 @@ local Settings = {
 	SpeedAmount = 5,
 	AutoDeploy = false,
 	AnimCancel = false,
-	ForceCanFire = false,
+	NoJumpCooldown = false,
+	JumpBoost = false,
 	MiscDebug = false,
 }
 
@@ -293,13 +294,17 @@ SpeedGroup:AddToggle("SpeedBoost", { Text = "Speed Boost", Default = false })
 SpeedGroup:AddSlider("SpeedAmount", { Text = "Extra Speed", Default = 5, Min = 1, Max = 8, Rounding = 0 })
 	:OnChanged(function(v) Settings.SpeedAmount = v end)
 
+SpeedGroup:AddToggle("NoJumpCooldown", { Text = "No Jump Cooldown", Default = false })
+	:OnChanged(function(v) Settings.NoJumpCooldown = v end)
+
+SpeedGroup:AddToggle("JumpBoost", { Text = "Max Jump Height", Default = false })
+	:OnChanged(function(v) Settings.JumpBoost = v end)
+
 local CombatGroup = MiscTab:AddLeftGroupbox("Combat")
 
 CombatGroup:AddToggle("AnimCancel", { Text = "Anim Cancel", Default = false })
 	:OnChanged(function(v) Settings.AnimCancel = v end)
 
-CombatGroup:AddToggle("ForceCanFire", { Text = "Force Fire", Default = false })
-	:OnChanged(function(v) Settings.ForceCanFire = v end)
 
 local AutoGroup = MiscTab:AddRightGroupbox("Automation")
 
@@ -1045,37 +1050,69 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 		if blur then blur.Size = 0 end
 	end
 
-	-- misc: speed boost within anti-cheat threshold
+	-- misc: speed boost — override DefaultWalkSpeed attribute so game's speedChanger uses our value
 	if Settings.SpeedBoost then
 		local char = plr.Character
 		if char then
 			local hum = char:FindFirstChildOfClass("Humanoid")
 			if hum then
-				local defaultSpeed = hum:GetAttribute("DefaultWalkSpeed") or 14
-				local targetSpeed = defaultSpeed + Settings.SpeedAmount
-				if hum.WalkSpeed < targetSpeed then
+				local backup = hum:GetAttribute("DefaultWalkSpeedBackup") or 12
+				local boosted = backup + Settings.SpeedAmount
+				local current = hum:GetAttribute("DefaultWalkSpeed")
+				if current ~= boosted then
+					hum:SetAttribute("DefaultWalkSpeed", boosted)
+					hum.WalkSpeed = boosted
 					if Settings.MiscDebug then
-						print("[Speed] Default:", defaultSpeed, "Target:", targetSpeed, "Current:", hum.WalkSpeed)
+						print("[Speed] Backup:", backup, "Boosted:", boosted)
 					end
-					hum.WalkSpeed = targetSpeed
 				end
 			end
 		end
 	end
 
-	-- misc: auto deploy — fire Deploy remote when on deploy screen
+	-- misc: no jump cooldown + jump boost
+	if Settings.NoJumpCooldown or Settings.JumpBoost then
+		local char = plr.Character
+		if char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				if Settings.NoJumpCooldown then
+					hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+				end
+				-- max out jump to just under AC threshold (50 power / 7.2 height)
+				if Settings.JumpBoost then
+					hum.JumpPower = 50
+					hum.JumpHeight = 7.2
+					if Settings.MiscDebug and hum.JumpPower ~= 50 then
+						print("[Jump] Set to max — Power:", hum.JumpPower, "Height:", hum.JumpHeight)
+					end
+				end
+			end
+		end
+	end
+
+	-- misc: auto deploy — fire Deploy when dead/on deploy screen
 	if Settings.AutoDeploy then
 		local char = plr.Character
-		if not char or not char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("Humanoid").Health <= 0 then
+		local isDead = not char or not char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("Humanoid").Health <= 0
+		if isDead then
 			pcall(function()
-				local gui = plr.PlayerGui:FindFirstChild("GameGui")
-				if gui then
-					local deploy = gui:FindFirstChild("deployScreen") or gui:FindFirstChild("DeployScreen")
-					if deploy and deploy.Visible then
-						if Settings.MiscDebug then
-							print("[Auto Deploy] Deploy screen detected, firing Deploy remote")
+				-- search all PlayerGui for any visible deploy-related screen
+				local found = false
+				for _, gui in plr.PlayerGui:GetChildren() do
+					if not gui:IsA("ScreenGui") or not gui.Enabled then continue end
+					for _, desc in gui:GetDescendants() do
+						if desc:IsA("GuiButton") and desc.Visible and string.lower(desc.Name):find("deploy") then
+							found = true
+							break
 						end
-						game:GetService("ReplicatedStorage").ServerEvents.Deploy:FireServer()
+					end
+					if found then break end
+				end
+				if found or isDead then
+					game:GetService("ReplicatedStorage").ServerEvents.Deploy:FireServer()
+					if Settings.MiscDebug then
+						print("[Auto Deploy] Fired Deploy remote, found button:", found)
 					end
 				end
 			end)
@@ -1091,34 +1128,18 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 				for _, track in hum:GetPlayingAnimationTracks() do
 					local name = track.Animation and track.Animation.Name or ""
 					if name == "reload" or name == "boltCycle" then
-						if Settings.MiscDebug then
-							print("[Anim Cancel] Speeding up:", name, "Length:", track.Length)
+						if track.Speed < 2 then
+							track:AdjustSpeed(3)
+							if Settings.MiscDebug then
+								print("[Anim Cancel] Sped up:", name, "Length:", track.Length)
+							end
 						end
-						track:AdjustSpeed(3)
 					end
 				end
 			end
 		end
 	end
 
-	-- misc: force fire — keep clientCanFire true on equipped weapon
-	if Settings.ForceCanFire then
-		local char = plr.Character
-		if char then
-			local tool = char:FindFirstChildOfClass("Tool")
-			if tool then
-				local canFireAttr = tool:GetAttribute("CanFire")
-				local canFireVal = tool:FindFirstChild("CanFire")
-				if Settings.MiscDebug and (canFireAttr == false or (canFireVal and canFireVal.Value == false)) then
-					print("[Force Fire] Overriding CanFire on:", tool.Name, "Attr:", canFireAttr, "Val:", canFireVal and canFireVal.Value)
-				end
-				if canFireVal and typeof(canFireVal) == "Instance" then
-					pcall(function() canFireVal.Value = true end)
-				end
-				pcall(function() tool:SetAttribute("CanFire", true) end)
-			end
-		end
-	end
 
 	-- ESP loop
 	local screenBottom = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
