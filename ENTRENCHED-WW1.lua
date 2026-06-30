@@ -419,7 +419,8 @@ local function isAlive(character)
 	return hum and hum.Health > 0
 end
 
-local function isVisible(origin, target)
+-- info: pierces through semi-transparent objects (Transparency > 0.3) — shared by all visibility checks
+local function raycastThroughGlass(origin, targetPos)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	local ignore = {}
@@ -427,20 +428,7 @@ local function isVisible(origin, target)
 		if p.Character then table.insert(ignore, p.Character) end
 	end
 	params.FilterDescendantsInstances = ignore
-	local result = workspace:Raycast(origin, target.Position - origin, params)
-	return result == nil
-end
-
--- info: like isVisible but pierces through semi-transparent objects (Transparency > 0.3)
-local function isVisibleThroughGlass(origin, target)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	local ignore = {}
-	for _, p in Players:GetPlayers() do
-		if p.Character then table.insert(ignore, p.Character) end
-	end
-	params.FilterDescendantsInstances = ignore
-	local dir = target.Position - origin
+	local dir = targetPos - origin
 	local pos = origin
 	for _ = 1, 10 do
 		local result = workspace:Raycast(pos, dir - (pos - origin), params)
@@ -451,6 +439,10 @@ local function isVisibleThroughGlass(origin, target)
 		pos = result.Position + (dir).Unit * 0.1
 	end
 	return false
+end
+
+local function isVisibleThroughGlass(origin, target)
+	return raycastThroughGlass(origin, target.Position)
 end
 
 local function isEnemy(player)
@@ -503,7 +495,7 @@ local function getAllInFOV()
 
 		local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
 		if not onScreen then continue end
-		if Settings.VisibleOnly and not isVisible(Camera.CFrame.Position, part) then continue end
+		if Settings.VisibleOnly and not isVisibleThroughGlass(Camera.CFrame.Position, part) then continue end
 
 		local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
 		if dist < Settings.FOV_Radius then
@@ -547,17 +539,9 @@ local function getPredictedPosition(part)
 	return predicted
 end
 
--- check if predicted position is reachable (no walls in the way)
+-- check if predicted position is reachable (no walls in the way), pierces glass like other checks
 local function isPredictedVisible(origin, predictedPos)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	local ignore = {}
-	for _, p in Players:GetPlayers() do
-		if p.Character then table.insert(ignore, p.Character) end
-	end
-	params.FilterDescendantsInstances = ignore
-	local result = workspace:Raycast(origin, predictedPos - origin, params)
-	return result == nil
+	return raycastThroughGlass(origin, predictedPos)
 end
 
 ----------------------------------------------------------------
@@ -934,7 +918,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 	if Settings.Aimbot_Enabled and Options.AimbotKey:GetState() then
 		if not aimbotHeld then aimbotHeld = true end
 		if lockedTarget and lockedTarget.Parent then
-			if Settings.VisibleOnly and not isVisible(Camera.CFrame.Position, lockedTarget) then
+			if Settings.VisibleOnly and not isVisibleThroughGlass(Camera.CFrame.Position, lockedTarget) then
 				lockedTarget = nil
 			end
 		end
